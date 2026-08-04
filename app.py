@@ -5,15 +5,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 from pathlib import Path
 
 # ------------------------------
 # Streamlit Config
 # ------------------------------
 st.set_page_config(page_title="Zomato Restaurant Recommendation", layout="wide")
-st.title("🍴 Zomato Restaurant Explorer")
+st.title("🍴 Zomato Restaurant Recommendation")
 
 # ------------------------------
 # Load Dataset (Optimized & Portable)
@@ -302,34 +300,7 @@ with col2:
 
     st.pyplot(fig)
 
-# ------------------------------
-# Dimensionality Reduction (Optional Button for Speed)
-# ------------------------------
-if st.sidebar.button("Run Dimensionality Reduction (PCA + t-SNE)"):
-    pca = PCA(n_components=2, random_state=42)
-    pca_data = pca.fit_transform(scaled_data)
-    df["pca1"], df["pca2"] = pca_data[:, 0], pca_data[:, 1]
-
-    tsne = TSNE(
-        n_components=2,
-        random_state=42,
-        perplexity=min(30, len(df) - 1),
-        n_iter=500,
-    )
-    tsne_data = tsne.fit_transform(scaled_data)
-    df["tsne1"], df["tsne2"] = tsne_data[:, 0], tsne_data[:, 1]
-
-    st.subheader("PCA Clusters")
-    fig1, ax1 = plt.subplots(figsize=(7, 5))
-    sns.scatterplot(x="pca1", y="pca2", hue="cluster", palette="tab10", data=df, s=40, ax=ax1)
-    st.pyplot(fig1)
-
-    st.subheader("t-SNE Clusters")
-    fig2, ax2 = plt.subplots(figsize=(7, 5))
-    sns.scatterplot(x="tsne1", y="tsne2", hue="cluster", palette="tab10", data=df, s=40, ax=ax2)
-    st.pyplot(fig2)
-
-# ------------------------------
+#-------------------------------
 # Additional Insights
 # ------------------------------
 st.markdown("---")
