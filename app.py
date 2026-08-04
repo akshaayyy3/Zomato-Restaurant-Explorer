@@ -3,12 +3,11 @@ import numpy as np
 import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
-import folium
-from streamlit_folium import st_folium
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+from pathlib import Path
 
 # ------------------------------
 # Streamlit Config
@@ -25,7 +24,9 @@ def load_data(uploaded_file=None):
         df = pd.read_csv(uploaded_file)
     else:
         # Default local fallback
-        csv_path = r"C:\Users\Akshay\OneDrive\Desktop\zomato\zomato_dataset.csv"
+
+
+        csv_path = Path("zomato_dataset.csv")
         df = pd.read_csv(csv_path)
 
     # Clean column names
@@ -78,6 +79,37 @@ def load_data(uploaded_file=None):
     df["rate"] = (
         (df["unified_rating"] / 5.0) * 0.5 + df["norm_votes"] * 0.3 + df["norm_price_inv"] * 0.2
     )
+    df["best_seller_score"] = np.where(
+        df["best_seller"].astype(str).str.upper() == "BESTSELLER",
+        1,
+        0
+    )
+    # ------------------------------
+    # Restaurant Level Aggregation
+    # ------------------------------
+    df = (
+        df.groupby(
+            ["restaurant_name", "city", "place_name", "primary_cuisine"],
+            as_index=False
+        )
+        .agg({
+            "dining_rating": "mean",
+            "delivery_rating": "mean",
+            "votes": "sum",
+            "prices": "mean",
+            "rate": "mean",
+            "best_seller_score": "max"
+        })
+    )
+    # Recreate price category after aggregation
+    bins = [0, 200, 500, 1000, 2000, np.inf]
+    labels = ["Very Low", "Low", "Medium", "High", "Very High"]
+
+    df["price_range_cat"] = pd.cut(
+        df["prices"],
+        bins=bins,
+        labels=labels
+    )
 
     return df
 
@@ -98,10 +130,14 @@ places = (
     if selected_cities
     else []
 )
-selected_places = st.sidebar.multiselect("Place", places, default=places[:3])
+selected_places = st.sidebar.multiselect("Place", places, default=places)
 
 cuisines = sorted(df["primary_cuisine"].unique())
-selected_cuisines = st.sidebar.multiselect("Cuisine", cuisines, default=cuisines[:5])
+selected_cuisines = st.sidebar.multiselect(
+    "Cuisine",
+    cuisines,
+    default=cuisines
+)
 
 min_rate = st.sidebar.slider("Minimum Rating", 0.0, 1.0, 0.3, 0.01)
 min_votes = st.sidebar.number_input("Minimum Votes", 0, 10000, 50, 10)
@@ -124,24 +160,51 @@ filtered_df = df[
 ].copy()
 
 # ------------------------------
+# Dashboard Overview
+# ------------------------------
+
+st.markdown("## 📊 Dashboard Overview")
+
+c1, c2, c3, c4 = st.columns(4)
+
+c1.metric("Restaurants", len(filtered_df))
+
+avg_rating = round(filtered_df["rate"].mean(),2) if not filtered_df.empty else 0
+c2.metric("Average Rating", avg_rating)
+
+avg_price = int(filtered_df["prices"].mean()) if not filtered_df.empty else 0
+c3.metric("Average Price", f"₹{avg_price}")
+
+top_cuisine = (
+    filtered_df["primary_cuisine"].mode()[0]
+    if not filtered_df.empty else "-"
+)
+
+c4.metric("Top Cuisine", top_cuisine)
+# ------------------------------
 # Recommendation Ranking
 # ------------------------------
 if not filtered_df.empty:
-    filtered_df["norm_rate"] = (filtered_df["rate"] - filtered_df["rate"].min()) / (
-        filtered_df["rate"].max() - filtered_df["rate"].min()
-    )
-    filtered_df["norm_votes"] = (filtered_df["votes"] - filtered_df["votes"].min()) / (
-        filtered_df["votes"].max() - filtered_df["votes"].min()
-    )
-    filtered_df["norm_price"] = (filtered_df["prices"] - filtered_df["prices"].min()) / (
-        filtered_df["prices"].max() - filtered_df["prices"].min()
-    )
+
+    def normalize(series):
+        if series.max() == series.min():
+            return pd.Series(np.ones(len(series)), index=series.index)
+
+        return (series - series.min()) / (series.max() - series.min())
+
+    filtered_df["norm_rate"] = normalize(filtered_df["rate"])
+    filtered_df["norm_votes"] = normalize(filtered_df["votes"])
+    filtered_df["norm_price"] = normalize(filtered_df["prices"])
 
     filtered_df["composite_score"] = (
-        0.5 * filtered_df["norm_rate"]
-        + 0.3 * filtered_df["norm_votes"]
-        + 0.2 * (1 - filtered_df["norm_price"])
+        0.45 * filtered_df["norm_rate"]
+        + 0.30 * filtered_df["norm_votes"]
+        + 0.15 * (1 - filtered_df["norm_price"])
+        + 0.10 * filtered_df["best_seller_score"]
     )
+    filtered_df["composite_score"] = (
+            filtered_df["composite_score"] * 100
+    ).round(2)
 
     recommendations = (
         filtered_df.sort_values(by="composite_score", ascending=False)
@@ -158,13 +221,28 @@ st.subheader(f"⭐ Top {num_recommend} Restaurant Recommendations")
 if not recommendations.empty:
     st.dataframe(
         recommendations[
-            ["restaurant_name", "city", "place_name", "primary_cuisine", "rate", "votes", "prices"]
-        ],
+            [
+                "restaurant_name",
+                "city",
+                "place_name",
+                "primary_cuisine",
+                "rate",
+                "votes",
+                "prices",
+                "best_seller_score",
+                "composite_score"
+            ]
+        ].style.background_gradient(
+            subset=["composite_score"],
+            cmap="Greens",
+        ),
         use_container_width=True,
     )
-else:
-    st.info("No restaurants match your filters. Try relaxing your criteria.")
 
+else:
+
+    st.info("No restaurants match your filters. Try relaxing your criteria.")
+st.success(f"Found {len(recommendations)} restaurant recommendations.")
 # ------------------------------
 # Clustering
 # ------------------------------
@@ -175,6 +253,7 @@ df_encoded = pd.get_dummies(df[categorical_cols], drop_first=True)
 df_encoded["votes"] = df["votes"]
 df_encoded["rate"] = df["rate"]
 df_encoded["prices"] = df["prices"]
+df_encoded["best_seller"] = df["best_seller_score"]
 
 scaler = StandardScaler()
 scaled_data = scaler.fit_transform(df_encoded)
@@ -189,11 +268,39 @@ st.markdown("---")
 st.subheader("📊 Cluster Analysis")
 
 col1, col2 = st.columns(2)
+
 with col1:
-    st.bar_chart(df["cluster"].value_counts(), use_container_width=True)
+    st.subheader("Cluster Summary")
+
+    summary = (
+        df.groupby("cluster")
+        .agg(
+            Restaurants=("restaurant_name", "count"),
+            Avg_Rating=("rate", "mean"),
+            Avg_Price=("prices", "mean"),
+            Avg_Votes=("votes", "mean")
+        )
+        .round(2)
+    )
+
+    st.dataframe(summary, use_container_width=True)
+
+
 with col2:
     cluster_ratings = df.groupby("cluster")["rate"].mean()
-    st.bar_chart(cluster_ratings, use_container_width=True)
+
+    fig, ax = plt.subplots(figsize=(7,5))
+
+    cluster_ratings.plot(
+        kind="bar",
+        ax=ax
+    )
+
+    ax.set_title("Average Rating by Cluster")
+    ax.set_xlabel("Cluster")
+    ax.set_ylabel("Average Rating")
+
+    st.pyplot(fig)
 
 # ------------------------------
 # Dimensionality Reduction (Optional Button for Speed)
@@ -230,27 +337,65 @@ st.subheader("📈 Insights")
 
 col3, col4 = st.columns(2)
 with col3:
-    st.write("Top 10 Cuisines")
-    st.bar_chart(df["primary_cuisine"].value_counts().head(10))
-with col4:
-    st.write("Price Range Distribution")
-    fig3, ax3 = plt.subplots(figsize=(7, 5))
-    sns.boxplot(x="price_range_cat", y="prices", data=df, palette="Set2", ax=ax3)
-    plt.xticks(rotation=45)
-    st.pyplot(fig3)
 
-# ------------------------------
-# Folium Map for Recommendations
-# ------------------------------
-if not recommendations.empty and "latitude" in df.columns and "longitude" in df.columns:
-    st.subheader("📍 Restaurant Locations Map")
-    m = folium.Map(location=[df["latitude"].mean(), df["longitude"].mean()], zoom_start=12)
-    for _, row in recommendations.iterrows():
-        folium.Marker(
-            location=[row["latitude"], row["longitude"]],
-            popup=f"{row['restaurant_name']} ({row['rate']:.2f})",
-        ).add_to(m)
-    st_folium(m, width=700, height=500)
+    st.write("Top 10 Cuisines")
+
+    top = df["primary_cuisine"].value_counts().head(10)
+
+    fig, ax = plt.subplots(figsize=(8,5))
+
+    sns.barplot(
+        x=top.values,
+        y=top.index,
+        palette="viridis",
+        ax=ax
+    )
+
+    ax.set_xlabel("Restaurants")
+    ax.set_ylabel("Cuisine")
+    ax.set_title("Top 10 Cuisines")
+
+    st.pyplot(fig)
+    st.write("Top 10 Restaurants by Votes")
+
+    top_restaurants = (
+        df.sort_values("votes", ascending=False)
+        .head(10)
+    )
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    sns.barplot(
+        data=top_restaurants,
+        x="votes",
+        y="restaurant_name",
+        palette="rocket",
+        ax=ax
+    )
+
+    ax.set_title("Most Popular Restaurants")
+
+    st.pyplot(fig)
+with col4:
+
+    st.write("Restaurant Price Distribution")
+
+    fig3, ax3 = plt.subplots(figsize=(8,5))
+
+    sns.histplot(
+        data=df,
+        x="prices",
+        bins=30,
+        kde=True,
+        color="royalblue",
+        ax=ax3
+    )
+
+    ax3.set_title("Restaurant Price Distribution")
+    ax3.set_xlabel("Average Cost")
+    ax3.set_ylabel("Restaurant Count")
+
+    st.pyplot(fig3)
 
 # ------------------------------
 # Export Recommendations
