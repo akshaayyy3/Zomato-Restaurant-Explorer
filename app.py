@@ -12,7 +12,7 @@ from pathlib import Path
 # ------------------------------
 # Streamlit Config
 # ------------------------------
-st.set_page_config(page_title="Zomato Explorer", layout="wide")
+st.set_page_config(page_title="Zomato Restaurant Recommendation", layout="wide")
 st.title("🍴 Zomato Restaurant Explorer")
 
 # ------------------------------
